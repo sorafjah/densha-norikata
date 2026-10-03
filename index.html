@@ -1,0 +1,234 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>でんしゃに のろう</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
+<style>
+/* Layout: one wide "screen" (the animation) with a step strip and big controls under it, sized for projecting in class */
+:root{
+  --bg:#eef2f4; --fg:#1d2a3a; --muted:#5b6b7a; --accent:#1f8a8a; --chip:#ffffff; --line:#cfd8de;
+  --font:"BIZ UDPGothic","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121a21; --fg:#e8eef2; --muted:#9aabb8; --accent:#4fc0bd; --chip:#1c2731; --line:#2c3a46; color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121a21; --fg:#e8eef2; --muted:#9aabb8; --accent:#4fc0bd; --chip:#1c2731; --line:#2c3a46; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--font)}
+.wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px 32px;display:grid;gap:14px}
+h1{margin:0;font-size:1.6rem;letter-spacing:.06em;text-wrap:balance}
+.sub{margin:0;color:var(--muted);font-size:.95rem}
+.stage{position:relative;width:100%;max-width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#cfe6f2}
+canvas{display:block;width:100%;height:100%}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.steps li{background:var(--chip);border:2px solid var(--line);border-radius:999px;padding:6px 14px;font-size:1rem;font-weight:700;color:var(--muted);transition:background .25s,color .25s,border-color .25s}
+.steps li.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.ctrl{display:flex;flex-wrap:wrap;gap:10px}
+button{font:inherit;font-weight:700;font-size:1.05rem;padding:10px 18px;border-radius:10px;border:2px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer;min-height:48px}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+</style>
+
+<div class="wrap">
+  <h1>でんしゃに のろう</h1>
+  <p class="sub">じかんに なると でんしゃが きます。のったら でんしゃは でて、また つぎの でんしゃを まちます。</p>
+
+  <div class="stage" id="stage"><canvas id="cv" width="960" height="540" aria-label="駅のホームで電車を待ち、乗って、発車するまでのアニメーション"></canvas></div>
+
+  <ol class="steps" id="steps"></ol>
+
+  <div class="ctrl">
+    <button id="bPlay" type="button">とめる</button>
+    <button id="bRestart" type="button">はじめから</button>
+    <button id="bFast" type="button" aria-pressed="false">はやおくり</button>
+    <button id="bSound" type="button" aria-pressed="false">おと</button>
+    <button id="bFull" type="button">おおきく</button>
+  </div>
+</div>
+
+<script>
+(()=>{
+const W=960,H=540,L=55,SPM=5.5;      // 1ぷん = 5.5びょう、1ループ55びょう = 10ぷん（2ふんまえに とうちゃく）
+const DOOR=480, STOPX=135, CAR=460, GAP=10, DEP=20, COLL=426, COLR=534;
+const DOORS=[0,1,2].flatMap(c=>[STOPX+c*(CAR+GAP)+115,STOPX+c*(CAR+GAP)+345]);
+const PH=[
+ {s:0,   e:4,   chip:'まつ',   cap:'まんなかを あけて 2れつに ならびます'},
+ {s:4,   e:9,   chip:'くる',   cap:'じかんに なると でんしゃが きます'},
+ {s:9,   e:10.5,chip:'ひらく', cap:'ドアが ひらきます'},
+ {s:10.5,e:12.5,chip:'おりる', cap:'おりる ひとが さきです'},
+ {s:12.5,e:18,  chip:'のる',   cap:'じゅんばんに のります'},
+ {s:18,  e:20,  chip:'しまる', cap:'ドアが しまります'},
+ {s:20,  e:25,  chip:'でる',   cap:'じかんに なったら しゅっぱつします'}
+];
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const dpr=Math.min(window.devicePixelRatio||1,2);
+cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
+const FONT='"BIZ UDPGothic","Hiragino Sans","Yu Gothic",sans-serif';
+
+const stepsEl=document.getElementById('steps');
+PH.forEach(p=>{const li=document.createElement('li');li.textContent=p.chip;stepsEl.appendChild(li)});
+const chips=[...stepsEl.children];
+
+let t=0,loop=0,playing=true,speed=1,sound=false,actx=null,lastIdx=-1;
+
+const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,p)=>a+(b-a)*p;
+const eo=p=>1-Math.pow(1-p,3), eio=p=>p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
+
+// ---------- sound ----------
+function tone(f,st,d,v=.18){if(!actx)return;const o=actx.createOscillator(),g=actx.createGain();o.type='sine';o.frequency.value=f;
+  const t0=actx.currentTime+st;g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(v,t0+.02);g.gain.exponentialRampToValueAtTime(.001,t0+d);
+  o.connect(g).connect(actx.destination);o.start(t0);o.stop(t0+d+.05)}
+function melody(){[660,880,784,988].forEach((f,i)=>tone(f,i*.22,.35))}
+function pinpon(){[0,.7].forEach(s=>{tone(988,s,.3);tone(784,s+.3,.4)})}
+
+// ---------- scene pieces ----------
+function rr(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
+function bg(){
+  const g=ctx.createLinearGradient(0,0,0,300);g.addColorStop(0,'#bfe0f0');g.addColorStop(1,'#e6f2f7');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,320);
+  ctx.fillStyle='#cfdde6';[[0,190,120,110],[130,215,90,85],[640,200,110,100],[760,225,90,75],[860,185,100,115]].forEach(b=>ctx.fillRect(...b));
+  ctx.fillStyle='#5b6570';ctx.fillRect(0,0,W,20);            // やね
+  ctx.fillStyle='#6b6f73';ctx.fillRect(0,300,W,20);          // せんろ
+  ctx.fillStyle='#8a8f94';ctx.fillRect(0,306,W,4);
+}
+function platform(){
+  ctx.fillStyle='#f4f4f0';ctx.fillRect(0,316,W,8);            // ホームのはし
+  ctx.fillStyle='#d8d3c6';ctx.fillRect(0,324,W,H-324);
+  ctx.fillStyle='#f2c230';ctx.fillRect(0,334,W,14);          // てんじブロック
+  ctx.fillStyle='#d9a91c';for(let x=6;x<W;x+=12){ctx.beginPath();ctx.arc(x,341,2.2,0,7);ctx.fill()}
+  // のりばの しるし（ドアの りょうがわに ならぶ）
+  // どの ドアの まえにも 2れつの しるし（まんなかは あける）
+  ctx.strokeStyle='#3a9a6a';ctx.lineWidth=3;ctx.setLineDash([10,7]);
+  DOORS.forEach(d=>{ctx.fillStyle='rgba(0,0,0,.05)';ctx.fillRect(d-22,352,44,100);
+    [d-54,d+54].forEach(x=>{rr(x-24,354,48,90,8);ctx.stroke()})});ctx.setLineDash([]);
+}
+function door(dx,o){
+  ctx.fillStyle='#3d4650';ctx.fillRect(dx-32,160,64,136);
+  ctx.fillStyle='#56616c';ctx.fillRect(dx-32,280,64,16);
+  ctx.strokeStyle='#c9a24a';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(dx,168);ctx.lineTo(dx,275);ctx.stroke(); // てすり
+  const w=32*(1-o);
+  ctx.fillStyle='#dfe4e8';ctx.fillRect(dx-32,160,w,136);ctx.fillRect(dx+32-w,160,w,136);
+  ctx.fillStyle='#a9d3ea';
+  if(w>8){ctx.fillRect(dx-32+4,170,w-8,48);ctx.fillRect(dx+32-w+4,170,w-8,48)}
+  ctx.strokeStyle='#9aa4ad';ctx.lineWidth=2;ctx.strokeRect(dx-32,160,64,136);
+}
+function train(x,o){
+  for(let c=0;c<3;c++){
+    const cx=x+c*(CAR+GAP); if(cx>W+20||cx+CAR<-20)continue;
+    ctx.fillStyle='#4a5058';ctx.fillRect(cx+10,298,CAR-20,16);
+    ctx.fillStyle='#2d3238';[70,105,355,390].forEach(w=>{ctx.beginPath();ctx.arc(cx+w,312,9,0,7);ctx.fill()});
+    rr(cx,130,CAR,170,c===0?[34,6,6,6]:6);ctx.fillStyle='#eef1f3';ctx.fill();
+    ctx.fillStyle='#b9c2c8';ctx.fillRect(cx+(c===0?30:0),130,CAR-(c===0?30:0),7);
+    ctx.fillStyle='#1f8a8a';ctx.fillRect(cx,226,CAR,12);ctx.fillStyle='#f08a24';ctx.fillRect(cx,240,CAR,4);
+    ctx.fillStyle='#a9d3ea';
+    [[25,55],[155,70],[235,70],[385,55]].forEach(([a,w])=>{rr(cx+a,166,w,46,4);ctx.fill()});
+    ctx.fillStyle='#7d8a96';                                   // なかの ひと
+    [[45,196],[175,194],[205,198],[270,195],[405,197]].forEach(([a,y],i)=>{if((i+c)%2===0){ctx.beginPath();ctx.arc(cx+a,y,7,0,7);ctx.fill();ctx.fillRect(cx+a-9,y+6,18,12)}ctx.fillStyle='#7d8a96'});
+    door(cx+115,o);door(cx+345,o);
+    if(c===0){
+      ctx.fillStyle='#1d2a3a';rr(cx+4,140,60,18,4);ctx.fill();
+      ctx.fillStyle='#ffb547';ctx.font='bold 12px '+FONT;ctx.textAlign='center';ctx.fillText('かくえき',cx+34,153);
+      ctx.fillStyle='#fff3c4';ctx.beginPath();ctx.arc(cx+14,270,6,0,7);ctx.fill();
+    }
+  }
+}
+function person(p){
+  if(!p||p.a<=0)return;
+  ctx.save();ctx.globalAlpha=p.a;ctx.translate(p.x,p.y);ctx.scale(p.s,p.s);
+  ctx.fillStyle='rgba(0,0,0,.15)';ctx.beginPath();ctx.ellipse(0,0,15,4,0,0,7);ctx.fill();
+  const sw=p.w?Math.sin(t*11+p.x*.05)*6:0;
+  ctx.strokeStyle='#3a3f47';ctx.lineWidth=7;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(-5,-28);ctx.lineTo(-5+sw,-3);ctx.moveTo(5,-28);ctx.lineTo(5-sw,-3);ctx.stroke();
+  rr(-14,-60,28,36,10);ctx.fillStyle=p.c;ctx.fill();
+  ctx.fillStyle='#f2cfa6';ctx.beginPath();ctx.arc(0,-71,11,0,7);ctx.fill();
+  ctx.fillStyle='#3a3029';ctx.beginPath();ctx.arc(0,-73,11,Math.PI*1.05,Math.PI*1.95);ctx.fill();
+  ctx.restore();
+}
+const pad=n=>String(n).padStart(2,'0');
+function hm(m){const tot=10*60+Math.floor(m);const h=Math.floor(((tot%1440)+1440)%1440/60),mm=((tot%60)+60)%60;return h+':'+pad(mm)}
+function board(sim,next,stopped){
+  const lab='つぎの でんしゃ',tm=hm(next);
+  ctx.font='bold 17px '+FONT;const w1=ctx.measureText(lab).width;
+  ctx.font='bold 40px '+FONT;const w2=ctx.measureText(tm).width;
+  const bw=Math.ceil(Math.max(w1,w2))+32;
+  rr(24,34,bw,84,8);ctx.fillStyle='#1d2a3a';ctx.fill();
+  ctx.textAlign='left';ctx.fillStyle='#fff';ctx.font='bold 17px '+FONT;ctx.fillText(lab,40,60);
+  ctx.fillStyle='#ffb547';ctx.font='bold 40px '+FONT;ctx.fillText(tm,40,106);
+}
+function clock(sim){
+  const cx=880,cy=74,r=42,tot=10*60+sim;
+  ctx.fillStyle='#5b6570';ctx.fillRect(cx-2,20,4,14);
+  ctx.fillStyle='#fff';ctx.strokeStyle='#5b6570';ctx.lineWidth=4;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();ctx.stroke();
+  ctx.fillStyle='#1d2a3a';for(let i=0;i<12;i++){const a=i*Math.PI/6;ctx.beginPath();ctx.arc(cx+Math.sin(a)*(r-8),cy-Math.cos(a)*(r-8),i%3?1.8:3,0,7);ctx.fill()}
+  const hand=(ang,len,w,col)=>{ctx.strokeStyle=col;ctx.lineWidth=w;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+Math.sin(ang)*len,cy-Math.cos(ang)*len);ctx.stroke()};
+  hand((tot/720)*Math.PI*2,22,5,'#1d2a3a');hand((tot%60/60)*Math.PI*2,33,3.5,'#1d2a3a');
+  hand((tot%1)*Math.PI*2,35,1.5,'#d8483a');
+  ctx.textAlign='right';ctx.fillStyle='#1d2a3a';ctx.font='bold 20px '+FONT;ctx.fillText('いま '+hm(sim),826,82);
+}
+function caption(i){
+  const p=PH[i],a=i===0?1:clamp((t-p.s)/.35);
+  ctx.save();ctx.globalAlpha=a;ctx.font='bold 32px '+FONT;
+  const w=ctx.measureText(p.cap).width+56;
+  rr(W/2-w/2,468,w,58,12);ctx.fillStyle='rgba(255,255,255,.94)';ctx.fill();
+  ctx.strokeStyle='#1f8a8a';ctx.lineWidth=3;ctx.stroke();
+  ctx.fillStyle='#1d2a3a';ctx.textAlign='center';ctx.fillText(p.cap,W/2,508);ctx.restore();
+}
+
+// ---------- people ----------
+const ROW=[385,425];
+// ひだりの れつも みぎの れつも、まえの ひとに つづいて のる
+const B=[
+ {qx:COLL,r:0,c:'#e0664f',side:-1,st:12.6,k:0},
+ {qx:COLL,r:1,c:'#e3a63b',side:-1,st:13.3,k:2},
+ {qx:COLR,r:0,c:'#4f7fe0',side:1, st:12.9,k:1},
+ {qx:COLR,r:1,c:'#3fa37a',side:1, st:13.6,k:3}];
+function boarder(b){
+  const y0=ROW[b.r],D=2.4,ex=DOOR+(b.side<0?-13:13);
+  if(t<b.st)return{x:b.qx,y:y0,s:1,a:1,w:0,c:b.c};
+  if(t<b.st+D){const p=(t-b.st)/D;                         // れつの まま ななめに ドアへ
+    return{x:lerp(b.qx,ex,p),y:lerp(y0,300,p),s:1-.12*clamp((p-.5)/.5),a:p<.7?1:1-(p-.7)/.3,w:1,c:b.c}}
+  const s2=25+b.k*.6;if(t<s2)return null;
+  const p=clamp((t-s2)/2.8);return{x:lerp(b.side<0?-40:1000,b.qx,eo(p)),y:y0,s:1,a:1,w:p<1?1:0,c:b.c};
+}
+function alighter(){
+  if(t<10.5||t>12.7)return null;const p=(t-10.5)/2;
+  if(p<.4){const q=p/.4;return{x:DOOR,y:lerp(300,455,q),s:.88+.12*q,a:clamp(q/.3),w:1,c:'#8a5fc0'}}
+  return{x:lerp(DOOR,1010,(p-.4)/.6),y:455,s:1,a:1,w:1,c:'#8a5fc0'};
+}
+
+// ---------- frame ----------
+function frame(){
+  const sim=loop*10+(t-DEP)/SPM;   // DEP びょう = しゅっぱつ じこく ちょうど
+  let tx; if(t<4)tx=null; else if(t<9)tx=STOPX+(1000-STOPX)*(1-eo((t-4)/5)); else if(t<DEP)tx=STOPX; else if(t<26)tx=STOPX-1700*Math.pow((t-DEP)/5,2.4); else tx=null;
+  let o=0; if(t>=9&&t<10.5)o=eio((t-9)/1.5); else if(t>=10.5&&t<18)o=1; else if(t>=18&&t<19.5)o=1-eio((t-18)/1.5);
+  const stopped=t>=9&&t<DEP, next=loop*10+(t>=DEP?10:0);
+  bg(); if(tx!==null&&tx>-1500)train(tx,o); platform();
+  const ppl=[...B.map(boarder),alighter()].filter(Boolean).sort((a,b)=>a.y-b.y);ppl.forEach(person);
+  board(sim,next,stopped);clock(sim);
+  const i0=PH.findIndex(p=>t>=p.s&&t<p.e),i=i0<0?0:i0;caption(i);
+  if(i!==lastIdx){chips.forEach((c,j)=>c.classList.toggle('on',j===i));lastIdx=i}
+}
+
+let prev=performance.now();
+function tick(now){
+  const dt=Math.min(.1,(now-prev)/1000);prev=now;
+  if(playing){const old=t;t+=dt*speed;
+    if(sound){if(old<9&&t>=9)melody();if(old<18&&t>=18)pinpon()}
+    if(t>=L){t-=L;loop++}}
+  frame();requestAnimationFrame(tick);
+}
+(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>requestAnimationFrame(tick));
+frame();
+
+// ---------- controls ----------
+const bPlay=document.getElementById('bPlay');
+bPlay.onclick=()=>{playing=!playing;bPlay.textContent=playing?'とめる':'うごかす'};
+document.getElementById('bRestart').onclick=()=>{t=0;loop=0;playing=true;bPlay.textContent='とめる'};
+const bFast=document.getElementById('bFast');
+bFast.onclick=()=>{speed=speed===1?4:1;bFast.setAttribute('aria-pressed',speed!==1)};
+const bSound=document.getElementById('bSound');
+bSound.onclick=()=>{sound=!sound;bSound.setAttribute('aria-pressed',sound);
+  if(sound&&!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
+  if(sound&&actx&&actx.state==='suspended')actx.resume()};
+document.getElementById('bFull').onclick=()=>{const s=document.getElementById('stage');try{const r=s.requestFullscreen&&s.requestFullscreen();r&&r.catch&&r.catch(()=>{})}catch(e){}};
+})();
+</script>
+
+</body></html>
