@@ -213,7 +213,7 @@ function alighter(){
 
 // ---------- frame ----------
 function frame(){
-  const sim=dep+(r-depR())/SPM;   // t=DEP の とき = しゅっぱつ じこく ちょうど
+  const sim=dep+0.5+(r-depR())/SPM;   // t=DEP の とき = じこくひょうの 30びょう あと（9時30分なら 9時30分30びょうに しゅっぱつ）
   let tx; if(t<4)tx=null; else if(t<9)tx=STOPX+(1000-STOPX)*(1-eo((t-4)/5)); else if(t<DEP)tx=STOPX; else if(t<26)tx=STOPX-1700*Math.pow((t-DEP)/5,2.4); else tx=null;
   let o=0; if(t>=9&&t<10.5)o=eio((t-9)/1.5); else if(t>=10.5&&t<18)o=1; else if(t>=18&&t<19.5)o=1-eio((t-18)/1.5);
   const next=t>=25?dep+gap:dep;   // でんしゃが がめんから いなくなったら つぎの じこくに かわる
