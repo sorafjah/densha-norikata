@@ -1,4 +1,8 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>でんしゃに のろう</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
 <style>
@@ -6,11 +10,14 @@
 :root{
   --bg:#eef2f4; --fg:#1d2a3a; --muted:#5b6b7a; --accent:#1f8a8a; --chip:#ffffff; --line:#cfd8de;
   --font:"BIZ UDPGothic","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --bg:#121a21; --fg:#e8eef2; --muted:#9aabb8; --accent:#4fc0bd; --chip:#1c2731; --line:#2c3a46; color-scheme:dark}}
 :root[data-theme="dark"]{--bg:#121a21; --fg:#e8eef2; --muted:#9aabb8; --accent:#4fc0bd; --chip:#1c2731; --line:#2c3a46; color-scheme:dark}
-body{background:var(--bg);color:var(--fg);font-family:var(--font)}
+html,body{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font)}
 .wrap{max-width:1000px;margin:0 auto;padding-inline:16px;padding-block:20px 32px;display:grid;gap:14px}
 h1{margin:0;font-size:1.6rem;letter-spacing:.06em;text-wrap:balance}
 .sub{margin:0;color:var(--muted);font-size:.95rem}
@@ -20,16 +27,18 @@ canvas{display:block;width:100%;height:100%}
 .steps li{background:var(--chip);border:2px solid var(--line);border-radius:999px;padding:6px 14px;font-size:1rem;font-weight:700;color:var(--muted);transition:background .25s,color .25s,border-color .25s}
 .steps li.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .ctrl{display:flex;flex-wrap:wrap;gap:10px}
-button{font:inherit;font-weight:700;font-size:1.05rem;padding:10px 18px;border-radius:10px;border:2px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer;min-height:48px}
+button{font:inherit;font-weight:700;font-size:1.05rem;padding:10px 18px;border-radius:10px;border:2px solid var(--line);background:var(--chip);color:var(--fg);cursor:pointer;min-height:48px;min-width:48px}
 button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <h1>でんしゃに のろう</h1>
   <p class="sub">じかんに なると でんしゃが きます。のったら でんしゃは でて、また つぎの でんしゃを まちます。</p>
 
-  <div class="stage" id="stage"><canvas id="cv" width="960" height="540" aria-label="駅のホームで電車を待ち、乗って、発車するまでのアニメーション"></canvas></div>
+  <div class="stage" id="stage"><canvas id="cv" width="960" height="540" aria-label="えきの ホームで でんしゃを まって、のって、でんしゃが でるまでの アニメーション"></canvas></div>
 
   <ol class="steps" id="steps"></ol>
 
@@ -44,8 +53,12 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 
 <script>
 (()=>{
-const W=960,H=540,L=55,SPM=5.5;      // 1ぷん = 5.5びょう、1ループ55びょう = 10ぷん（2ふんまえに とうちゃく）
+// 1ぷん = 7びょう。でんしゃの かんかくは 3〜6ぷん（ランダム）なので、1ループは 21〜42びょう
+// うごきの じかん（t）は もとの びょうで かいてあり、K ばいの はやさで すすめる
+// でんしゃが くる(t=4) 〜 つぎの ひとが ならびおわる(t=29.6) が EV びょう。のこりは まつ じかん
+const W=960,H=540,SPM=7,K=0.8,EV=25.6*K;
 const DOOR=480, STOPX=135, CAR=460, GAP=10, DEP=20, COLL=426, COLR=534;
+const START_MIN=7*60, START_MAX=12*60, GAP_MIN=3, GAP_MAX=6;
 const DOORS=[0,1,2].flatMap(c=>[STOPX+c*(CAR+GAP)+115,STOPX+c*(CAR+GAP)+345]);
 const PH=[
  {s:0,   e:4,   chip:'まつ',   cap:'まんなかを あけて 2れつに ならびます'},
@@ -65,7 +78,14 @@ const stepsEl=document.getElementById('steps');
 PH.forEach(p=>{const li=document.createElement('li');li.textContent=p.chip;stepsEl.appendChild(li)});
 const chips=[...stepsEl.children];
 
-let t=0,loop=0,playing=true,speed=1,sound=false,actx=null,lastIdx=-1;
+const rint=(a,b)=>a+Math.floor(Math.random()*(b-a+1));
+// dep: この ループで でる じこく（ぷん）、gap: つぎの でんしゃまでの ぷん、L: この ループの ながさ（びょう）
+// r: ループの なかの ほんとうの びょう、t: うごきの じかん
+let r=0,t=0,dep=0,gap=0,L=0,playing=true,speed=1,sound=false,actx=null,lastIdx=-1;
+function sceneT(){const w=L-EV;return r<w?4*r/w:4+(r-w)/K}
+function depR(){return L-EV+16*K}            // しゅっぱつする ほんとうの びょう（t=20 の とき）
+function newSchedule(){dep=rint(START_MIN,START_MAX);gap=rint(GAP_MIN,GAP_MAX);L=gap*SPM;r=0;t=sceneT()}
+newSchedule();
 
 const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
 const lerp=(a,b,p)=>a+(b-a)*p;
@@ -81,8 +101,7 @@ function pinpon(){[0,.7].forEach(s=>{tone(988,s,.3);tone(784,s+.3,.4)})}
 // ---------- scene pieces ----------
 function rr(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
 function bg(){
-  const g=ctx.createLinearGradient(0,0,0,300);g.addColorStop(0,'#bfe0f0');g.addColorStop(1,'#e6f2f7');
-  ctx.fillStyle=g;ctx.fillRect(0,0,W,320);
+  ctx.fillStyle='#d6ebf4';ctx.fillRect(0,0,W,320);
   ctx.fillStyle='#cfdde6';[[0,190,120,110],[130,215,90,85],[640,200,110,100],[760,225,90,75],[860,185,100,115]].forEach(b=>ctx.fillRect(...b));
   ctx.fillStyle='#5b6570';ctx.fillRect(0,0,W,20);            // やね
   ctx.fillStyle='#6b6f73';ctx.fillRect(0,300,W,20);          // せんろ
@@ -93,7 +112,6 @@ function platform(){
   ctx.fillStyle='#d8d3c6';ctx.fillRect(0,324,W,H-324);
   ctx.fillStyle='#f2c230';ctx.fillRect(0,334,W,14);          // てんじブロック
   ctx.fillStyle='#d9a91c';for(let x=6;x<W;x+=12){ctx.beginPath();ctx.arc(x,341,2.2,0,7);ctx.fill()}
-  // のりばの しるし（ドアの りょうがわに ならぶ）
   // どの ドアの まえにも 2れつの しるし（まんなかは あける）
   ctx.strokeStyle='#3a9a6a';ctx.lineWidth=3;ctx.setLineDash([10,7]);
   DOORS.forEach(d=>{ctx.fillStyle='rgba(0,0,0,.05)';ctx.fillRect(d-22,352,44,100);
@@ -141,9 +159,9 @@ function person(p){
   ctx.fillStyle='#3a3029';ctx.beginPath();ctx.arc(0,-73,11,Math.PI*1.05,Math.PI*1.95);ctx.fill();
   ctx.restore();
 }
-const pad=n=>String(n).padStart(2,'0');
-function hm(m){const tot=10*60+Math.floor(m);const h=Math.floor(((tot%1440)+1440)%1440/60),mm=((tot%60)+60)%60;return h+':'+pad(mm)}
-function board(sim,next,stopped){
+// じこくは「7時5分」の かたちで（ふんは 0を つけない）
+function hm(m){const tot=Math.floor(m),d=((tot%1440)+1440)%1440;return Math.floor(d/60)+'時'+(d%60)+'分'}
+function board(next){
   const lab='つぎの でんしゃ',tm=hm(next);
   ctx.font='bold 17px '+FONT;const w1=ctx.measureText(lab).width;
   ctx.font='bold 40px '+FONT;const w2=ctx.measureText(tm).width;
@@ -153,7 +171,7 @@ function board(sim,next,stopped){
   ctx.fillStyle='#ffb547';ctx.font='bold 40px '+FONT;ctx.fillText(tm,40,106);
 }
 function clock(sim){
-  const cx=880,cy=74,r=42,tot=10*60+sim;
+  const cx=880,cy=74,r=42,tot=sim;
   ctx.fillStyle='#5b6570';ctx.fillRect(cx-2,20,4,14);
   ctx.fillStyle='#fff';ctx.strokeStyle='#5b6570';ctx.lineWidth=4;ctx.beginPath();ctx.arc(cx,cy,r,0,7);ctx.fill();ctx.stroke();
   ctx.fillStyle='#1d2a3a';for(let i=0;i<12;i++){const a=i*Math.PI/6;ctx.beginPath();ctx.arc(cx+Math.sin(a)*(r-8),cy-Math.cos(a)*(r-8),i%3?1.8:3,0,7);ctx.fill()}
@@ -184,7 +202,7 @@ function boarder(b){
   if(t<b.st)return{x:b.qx,y:y0,s:1,a:1,w:0,c:b.c};
   if(t<b.st+D){const p=(t-b.st)/D;                         // れつの まま ななめに ドアへ
     return{x:lerp(b.qx,ex,p),y:lerp(y0,300,p),s:1-.12*clamp((p-.5)/.5),a:p<.7?1:1-(p-.7)/.3,w:1,c:b.c}}
-  const s2=25+b.k*.6;if(t<s2)return null;
+  const s2=25+b.k*.6;if(t<s2)return null;                   // つぎの ひとが ならびに くる
   const p=clamp((t-s2)/2.8);return{x:lerp(b.side<0?-40:1000,b.qx,eo(p)),y:y0,s:1,a:1,w:p<1?1:0,c:b.c};
 }
 function alighter(){
@@ -195,13 +213,13 @@ function alighter(){
 
 // ---------- frame ----------
 function frame(){
-  const sim=loop*10+(t-DEP)/SPM;   // DEP びょう = しゅっぱつ じこく ちょうど
+  const sim=dep+(r-depR())/SPM;   // t=DEP の とき = しゅっぱつ じこく ちょうど
   let tx; if(t<4)tx=null; else if(t<9)tx=STOPX+(1000-STOPX)*(1-eo((t-4)/5)); else if(t<DEP)tx=STOPX; else if(t<26)tx=STOPX-1700*Math.pow((t-DEP)/5,2.4); else tx=null;
   let o=0; if(t>=9&&t<10.5)o=eio((t-9)/1.5); else if(t>=10.5&&t<18)o=1; else if(t>=18&&t<19.5)o=1-eio((t-18)/1.5);
-  const stopped=t>=9&&t<DEP, next=loop*10+(t>=DEP?10:0);
+  const next=t>=25?dep+gap:dep;   // でんしゃが がめんから いなくなったら つぎの じこくに かわる
   bg(); if(tx!==null&&tx>-1500)train(tx,o); platform();
   const ppl=[...B.map(boarder),alighter()].filter(Boolean).sort((a,b)=>a.y-b.y);ppl.forEach(person);
-  board(sim,next,stopped);clock(sim);
+  board(next);clock(sim);
   const i0=PH.findIndex(p=>t>=p.s&&t<p.e),i=i0<0?0:i0;caption(i);
   if(i!==lastIdx){chips.forEach((c,j)=>c.classList.toggle('on',j===i));lastIdx=i}
 }
@@ -209,9 +227,10 @@ function frame(){
 let prev=performance.now();
 function tick(now){
   const dt=Math.min(.1,(now-prev)/1000);prev=now;
-  if(playing){const old=t;t+=dt*speed;
-    if(sound){if(old<9&&t>=9)melody();if(old<18&&t>=18)pinpon()}
-    if(t>=L){t-=L;loop++}}
+  if(playing){r+=dt*speed;
+    if(r>=L){r-=L;dep+=gap;gap=rint(GAP_MIN,GAP_MAX);L=gap*SPM}   // つぎの でんしゃへ
+    const old=t;t=sceneT();
+    if(sound&&old<t){if(old<9&&t>=9)melody();if(old<18&&t>=18)pinpon()}}
   frame();requestAnimationFrame(tick);
 }
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>requestAnimationFrame(tick));
@@ -220,15 +239,16 @@ frame();
 // ---------- controls ----------
 const bPlay=document.getElementById('bPlay');
 bPlay.onclick=()=>{playing=!playing;bPlay.textContent=playing?'とめる':'うごかす'};
-document.getElementById('bRestart').onclick=()=>{t=0;loop=0;playing=true;bPlay.textContent='とめる'};
+document.getElementById('bRestart').onclick=()=>{newSchedule();playing=true;bPlay.textContent='とめる'};
 const bFast=document.getElementById('bFast');
 bFast.onclick=()=>{speed=speed===1?4:1;bFast.setAttribute('aria-pressed',speed!==1)};
 const bSound=document.getElementById('bSound');
-bSound.onclick=()=>{sound=!sound;bSound.setAttribute('aria-pressed',sound);
-  if(sound&&!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
-  if(sound&&actx&&actx.state==='suspended')actx.resume()};
+bSound.onclick=()=>{
+  if(!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
+  if(actx&&actx.state==='suspended')actx.resume();
+  sound=!sound;bSound.setAttribute('aria-pressed',sound)};
 document.getElementById('bFull').onclick=()=>{const s=document.getElementById('stage');try{const r=s.requestFullscreen&&s.requestFullscreen();r&&r.catch&&r.catch(()=>{})}catch(e){}};
 })();
 </script>
-
-</body></html>
+</body>
+</html>
